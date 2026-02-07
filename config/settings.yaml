@@ -1,0 +1,18 @@
+ingestion:
+  sources:
+    - type: rest
+      name: feedback_api
+      url: https://example.com/api/feedback
+    - type: csv
+      name: local_csv
+      path: data/feedback.csv
+    - type: json
+      name: local_json
+      path: data/feedback.json
+
+gcs:
+  raw_prefix: raw/llm_feedback/
+
+bigquery:
+  dataset: your_dataset
+  table: llm_feedback_curated
