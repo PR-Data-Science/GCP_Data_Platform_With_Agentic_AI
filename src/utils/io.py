@@ -1,6 +1,10 @@
+"""I/O utilities for pipeline data."""
+
 from __future__ import annotations
 
 from typing import Iterable
+
+from google.cloud import bigquery
 
 
 def normalize_rows(rows: Iterable[dict]) -> list[dict]:
@@ -14,3 +18,11 @@ def normalize_rows(rows: Iterable[dict]) -> list[dict]:
             "model": row.get("model") or row.get("model_name"),
         })
     return normalized
+
+
+def load_to_bigquery(rows: list[dict], dataset: str, table: str) -> None:
+    client = bigquery.Client()
+    table_id = f"{client.project}.{dataset}.{table}"
+    errors = client.insert_rows_json(table_id, rows)
+    if errors:
+        raise RuntimeError(f"BigQuery insert errors: {errors}")

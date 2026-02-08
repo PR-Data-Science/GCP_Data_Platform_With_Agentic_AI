@@ -1,0 +1,26 @@
+env: dev
+gcp:
+  project_id: "liquid-layout-413121"
+  region: "us-central1"
+  gcs:
+    raw_bucket: "liquid-layout-413121-llmfb-raw-dev"
+    bronze_bucket: "liquid-layout-413121-llmfb-bronze-dev"     # optional if delta stored on GCS path
+    silver_bucket: "liquid-layout-413121-llmfb-silver-dev"
+    gold_bucket: "liquid-layout-413121-llmfb-gold-dev"
+bigquery:
+  location: "US"
+  dataset_bronze: "bronze"
+  dataset_silver: "silver"
+  dataset_gold: "gold"
+  dataset_ops: "ops"
+databricks:
+  workspace_url: "<TBD>"
+  warehouse_id: "<TBD>"
+  catalog: "<TBD>"             # if using Unity Catalog
+  schema_bronze: "bronze"
+  schema_silver: "silver"
+  schema_gold: "gold"
+ops:
+  schema_registry_table: "ops.schema_registry"
+  pipeline_runs_table: "ops.pipeline_runs"
+  dq_results_table: "ops.dq_results"
