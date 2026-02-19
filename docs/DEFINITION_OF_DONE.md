@@ -10,4 +10,4 @@
 ## Verification Commands
 - git status
 - pytest
-- databricks job run (placeholder)
+- dataproc batch run (placeholder)

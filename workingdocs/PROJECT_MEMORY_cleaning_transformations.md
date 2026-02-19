@@ -1,4 +1,3 @@
-<!-- Placeholder for cleaning transformation notes. -->
 # Dataproc-on-GCP LLM Feedback Pipeline — Cleaning & Transformation Notes (Project Memory)
 
 **Purpose of this file:** Persist the agreed understanding of *what cleaning + transformations we need* for LLM human-evaluation feedback data, and how this fits into the overall project (Part 1 vs Part 2).  

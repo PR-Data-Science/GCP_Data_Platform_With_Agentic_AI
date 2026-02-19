@@ -13,13 +13,6 @@ bigquery:
   dataset_silver: "silver"
   dataset_gold: "gold"
   dataset_ops: "ops"
-databricks:
-  workspace_url: "<TBD>"
-  warehouse_id: "<TBD>"
-  catalog: "<TBD>"             # if using Unity Catalog
-  schema_bronze: "bronze"
-  schema_silver: "silver"
-  schema_gold: "gold"
 ops:
   schema_registry_table: "ops.schema_registry"
   pipeline_runs_table: "ops.pipeline_runs"
