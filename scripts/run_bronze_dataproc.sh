@@ -4,26 +4,34 @@ set -euo pipefail
 # Submit the Dataproc Serverless bronze ingest job.
 #
 # Required env vars:
-#   PROJECT_ID, REGION, GCS_BUCKET, SERVICE_ACCOUNT
+#   PROJECT_ID, REGION, RAW_BUCKET, BRONZE_BUCKET, SERVICE_ACCOUNT
 # Optional env vars:
 #   ENV_NAME (default: dev)
 #   RAW_PREFIX (default: raw/)
 #   BRONZE_PREFIX (default: bronze/)
 #   RUN_ID, INGEST_DATE, BATCH_NAME
 #   MODE (default: append)
+# Backward compatibility:
+#   If GCS_BUCKET is provided, it is used as fallback for RAW_BUCKET/BRONZE_BUCKET.
 #
 # Example (specific run_id):
 #   PROJECT_ID=liquid-layout-413121 \
 #   REGION=us-central1 \
-#   GCS_BUCKET=liquid-layout-413121-llmfb-raw-dev \
+#   RAW_BUCKET=liquid-layout-413121-llmfb-raw-dev \
+#   BRONZE_BUCKET=liquid-layout-413121-llmfb-bronze-dev \
 #   SERVICE_ACCOUNT=dataproc-runner@liquid-layout-413121.iam.gserviceaccount.com \
 #   RUN_ID=1a2b3c4d-0000-1111-2222-abcdefabcdef \
 #   bash scripts/run_bronze_dataproc.sh
 
 : "${PROJECT_ID:?PROJECT_ID is required}"
 : "${REGION:?REGION is required}"
-: "${GCS_BUCKET:?GCS_BUCKET is required}"
 : "${SERVICE_ACCOUNT:?SERVICE_ACCOUNT is required}"
+
+RAW_BUCKET="${RAW_BUCKET:-${GCS_BUCKET:-}}"
+BRONZE_BUCKET="${BRONZE_BUCKET:-${GCS_BUCKET:-}}"
+
+: "${RAW_BUCKET:?RAW_BUCKET is required (or set GCS_BUCKET)}"
+: "${BRONZE_BUCKET:?BRONZE_BUCKET is required (or set GCS_BUCKET)}"
 
 ENV_NAME="${ENV_NAME:-dev}"
 RAW_PREFIX="${RAW_PREFIX:-raw/}"
@@ -32,7 +40,8 @@ MODE="${MODE:-append}"
 
 ARGS=(
   "--env=${ENV_NAME}"
-  "--gcs_bucket=${GCS_BUCKET}"
+  "--raw_bucket=${RAW_BUCKET}"
+  "--bronze_bucket=${BRONZE_BUCKET}"
   "--raw_prefix=${RAW_PREFIX}"
   "--bronze_prefix=${BRONZE_PREFIX}"
   "--mode=${MODE}"
@@ -48,15 +57,13 @@ if [[ -n "${BATCH_NAME:-}" ]]; then
   ARGS+=("--batch_name=${BATCH_NAME}")
 fi
 
-JOB_FILE="gs://${GCS_BUCKET}/jobs/bronze_ingest_dataproc.py"
+JOB_FILE="gs://${RAW_BUCKET}/jobs/bronze_ingest_dataproc.py"
 
-if ! gcloud storage ls "${JOB_FILE}" >/dev/null 2>&1; then
-  echo "Uploading job to ${JOB_FILE}"
-  gcloud storage cp src/bronze/bronze_ingest_dataproc.py "${JOB_FILE}"
-fi
+echo "Uploading latest job to ${JOB_FILE}"
+gcloud storage cp src/bronze/bronze_ingest_dataproc.py "${JOB_FILE}"
 
 gcloud dataproc batches submit pyspark "${JOB_FILE}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --service-account="${SERVICE_ACCOUNT}" \
-  --args="${ARGS[*]}"
+  -- "${ARGS[@]}"
