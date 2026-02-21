@@ -1,3 +1,4 @@
 pyyaml==6.*
 google-cloud-storage==2.*
 pytest==8.*
+pyspark==3.5.*
