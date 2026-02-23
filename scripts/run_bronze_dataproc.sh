@@ -37,6 +37,7 @@ ENV_NAME="${ENV_NAME:-dev}"
 RAW_PREFIX="${RAW_PREFIX:-raw/}"
 BRONZE_PREFIX="${BRONZE_PREFIX:-bronze/}"
 MODE="${MODE:-append}"
+DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-}"
 
 ARGS=(
   "--env=${ENV_NAME}"
@@ -66,4 +67,5 @@ gcloud dataproc batches submit pyspark "${JOB_FILE}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --service-account="${SERVICE_ACCOUNT}" \
+  ${DATAPROC_PROPERTIES:+--properties="${DATAPROC_PROPERTIES}"} \
   -- "${ARGS[@]}"

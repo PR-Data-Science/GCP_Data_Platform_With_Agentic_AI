@@ -27,6 +27,7 @@ ENV_NAME="${ENV_NAME:-dev}"
 SILVER_PREFIX="${SILVER_PREFIX:-silver/}"
 GOLD_PREFIX="${GOLD_PREFIX:-gold/}"
 PUBLISH_BIGQUERY="${PUBLISH_BIGQUERY:-false}"
+DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-}"
 
 ARGS=(
   "--env=${ENV_NAME}"
@@ -60,4 +61,5 @@ gcloud dataproc batches submit pyspark "${JOB_FILE}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --service-account="${SERVICE_ACCOUNT}" \
+  ${DATAPROC_PROPERTIES:+--properties="${DATAPROC_PROPERTIES}"} \
   -- "${ARGS[@]}"
