@@ -27,7 +27,7 @@ ENV_NAME="${ENV_NAME:-dev}"
 SILVER_PREFIX="${SILVER_PREFIX:-silver/}"
 GOLD_PREFIX="${GOLD_PREFIX:-gold/}"
 PUBLISH_BIGQUERY="${PUBLISH_BIGQUERY:-false}"
-DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-}"
+DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-spark.dynamicAllocation.enabled=false,spark.executor.instances=2,spark.executor.cores=4,spark.driver.cores=4}"
 
 ARGS=(
   "--env=${ENV_NAME}"

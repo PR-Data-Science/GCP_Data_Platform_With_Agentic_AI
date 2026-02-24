@@ -45,7 +45,7 @@ PUBLISH_BIGQUERY="${PUBLISH_BIGQUERY:-false}"
 BQ_PROJECT="${BQ_PROJECT:-$PROJECT_ID}"
 BQ_DATASET="${BQ_DATASET:-gold}"
 BUILD_STAR_SCHEMA="${BUILD_STAR_SCHEMA:-false}"
-DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-spark.dynamicAllocation.enabled=false,spark.executor.instances=1,spark.executor.cores=4,spark.driver.cores=4}"
+DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-spark.dynamicAllocation.enabled=false,spark.executor.instances=2,spark.executor.cores=4,spark.driver.cores=4}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

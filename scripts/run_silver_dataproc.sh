@@ -28,7 +28,7 @@ ENV_NAME="${ENV_NAME:-dev}"
 BRONZE_PREFIX="${BRONZE_PREFIX:-bronze/}"
 SILVER_PREFIX="${SILVER_PREFIX:-silver/}"
 MODE="${MODE:-append}"
-DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-}"
+DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-spark.dynamicAllocation.enabled=false,spark.executor.instances=2,spark.executor.cores=4,spark.driver.cores=4}"
 
 ARGS=(
   "--env=${ENV_NAME}"
