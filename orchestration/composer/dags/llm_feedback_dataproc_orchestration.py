@@ -5,7 +5,11 @@ from typing import Any
 from uuid import uuid4
 
 import pendulum
-from airflow.decorators import dag, get_current_context, task
+from airflow.decorators import dag, task
+try:
+    from airflow.decorators import get_current_context
+except ImportError:
+    from airflow.operators.python import get_current_context
 from airflow.exceptions import AirflowException
 from airflow.models import Variable
 from airflow.operators.empty import EmptyOperator
