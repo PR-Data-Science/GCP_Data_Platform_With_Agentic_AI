@@ -72,13 +72,49 @@ Example value:
 
 ## Deploy to Composer
 
-1. Upload DAG:
+### Environment details
+
+| Setting     | Value                            |
+|-------------|----------------------------------|
+| Environment | `gcpllmevaluationprojautomation` |
+| Location    | `us-central1`                    |
+| Project     | `liquid-layout-413121`           |
+
+### Option A — convenience script (recommended)
+
+```bash
+bash infra/gcp/deploy_dags_to_composer.sh
+```
+
+This uploads both DAGs in one command. Override defaults if needed:
+
+```bash
+COMPOSER_ENV=gcpllmevaluationprojautomation \
+COMPOSER_LOCATION=us-central1 \
+PROJECT_ID=liquid-layout-413121 \
+bash infra/gcp/deploy_dags_to_composer.sh
+```
+
+### Option B — manual upload
 
 ```bash
 gcloud composer environments storage dags import \
-  --environment <composer-env-name> \
-  --location <composer-region> \
+  --environment gcpllmevaluationprojautomation \
+  --location us-central1 \
+  --project liquid-layout-413121 \
   --source orchestration/composer/dags/llm_feedback_dataproc_orchestration.py
+
+gcloud composer environments storage dags import \
+  --environment gcpllmevaluationprojautomation \
+  --location us-central1 \
+  --project liquid-layout-413121 \
+  --source orchestration/composer/dags/llm_feedback_full_e2e_composer.py
+```
+
+### Check Composer status
+
+```bash
+bash infra/gcp/check_composer_status.sh
 ```
 
 2. Set Variable in Airflow UI or CLI.

@@ -130,7 +130,7 @@ def build_stage_plan(
             f"--env={config.get('env', 'dev')}",
             f"--raw_bucket={config['raw_bucket']}",
             f"--bronze_bucket={config['bronze_bucket']}",
-            f"--raw_prefix={bronze_prefix}/",
+            f"--raw_prefix={str(config['raw_prefix']).strip('/')}/",
             f"--bronze_prefix={bronze_prefix}/",
             "--mode=append",
             f"--run_id={run_id}",
