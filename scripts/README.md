@@ -1,5 +1,29 @@
 # Scripts
 
+## set_composer_variable.sh
+
+Creates or updates Composer Airflow Variable `llm_feedback_composer_config` from a JSON file.
+
+### Required environment variables
+
+- `COMPOSER_ENV`
+- `COMPOSER_REGION`
+
+### Optional environment variables
+
+- `PROJECT_ID`
+- `VAR_NAME` (default: `llm_feedback_composer_config`)
+- `VAR_JSON_PATH` (default: `orchestration/composer/llm_feedback_composer_config.dev.json`)
+
+### Example
+
+```bash
+COMPOSER_ENV='your-composer-env' \
+COMPOSER_REGION='us-central1' \
+PROJECT_ID='your-project-id' \
+bash scripts/set_composer_variable.sh
+```
+
 ## run_full_pipeline_dev.sh
 
 Runs the full dev flow in sequence:

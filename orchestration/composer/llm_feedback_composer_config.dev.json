@@ -1,0 +1,29 @@
+{
+  "env": "dev",
+  "project_id": "liquid-layout-413121",
+  "region": "us-central1",
+  "gcp_conn_id": "google_cloud_default",
+  "service_account": "438895410098-compute@developer.gserviceaccount.com",
+  "source_name": "llm_feedback_eval",
+  "datasource_prefix": "datasource",
+  "raw_bucket": "liquid-layout-413121-llmfb-raw-dev",
+  "bronze_bucket": "liquid-layout-413121-llmfb-bronze-dev",
+  "silver_bucket": "liquid-layout-413121-llmfb-silver-dev",
+  "gold_bucket": "liquid-layout-413121-llmfb-gold-dev",
+  "raw_prefix": "raw",
+  "bronze_prefix": "bronze",
+  "silver_prefix": "silver",
+  "gold_prefix": "gold",
+  "pod_name": "Magi_Code_Python",
+  "pod_type": "vertical",
+  "task_type": "EAC_NEXT_STEPS_SIMPLIFIED",
+  "auto_batch_id": "python_training_version1_LLMrated_batch",
+  "human_batch_id": "python_training_version1_HUMANrated_batch",
+  "record_count_per_batch": 12,
+  "dataproc_properties": {
+    "spark.dynamicAllocation.enabled": "false",
+    "spark.executor.instances": "1",
+    "spark.executor.cores": "2",
+    "spark.driver.cores": "1"
+  }
+}

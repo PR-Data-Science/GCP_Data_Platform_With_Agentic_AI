@@ -62,6 +62,15 @@ By the end of this lab, you should be able to confidently explain and demonstrat
   - `service_account`,
   - `dataproc_properties`.
 
+If variable is missing, set it using:
+
+```bash
+COMPOSER_ENV='<composer-env-name>' \
+COMPOSER_REGION='<composer-region>' \
+PROJECT_ID='<gcp-project-id>' \
+bash scripts/set_composer_variable.sh
+```
+
 ### Expected outcome
 - DAGs are visible and parse successfully.
 - No immediate import/runtime config issues in Airflow.
@@ -121,6 +130,10 @@ Capture:
 - Dataproc batch ID,
 - error class/message,
 - impact scope (one branch or full DAG).
+
+Note on failure counts:
+- A single root cause may show as multiple failed tasks (for example `4` or `1`) because retries are enabled and some tasks are dynamically mapped.
+- Check the first failing mapped task log and root exception before counting total failed task instances.
 
 ### Task C3: Recover
 - Fix bad config.

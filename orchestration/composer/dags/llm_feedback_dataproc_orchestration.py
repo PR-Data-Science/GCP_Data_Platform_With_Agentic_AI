@@ -240,7 +240,7 @@ def get_submit_list(plan: dict[str, list[dict[str, Any]]], stage_key: str) -> li
 
 @dag(
     dag_id=DAG_ID,
-    schedule="*/15 * * * *",
+    schedule="0 0 * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,

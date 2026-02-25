@@ -70,6 +70,19 @@ Example value:
 }
 ```
 
+Quick setup via script:
+
+```bash
+COMPOSER_ENV='<composer-env-name>' \
+COMPOSER_REGION='<composer-region>' \
+PROJECT_ID='<gcp-project-id>' \
+bash scripts/set_composer_variable.sh
+```
+
+Optional overrides:
+- `VAR_NAME` (default: `llm_feedback_composer_config`)
+- `VAR_JSON_PATH` (default: `orchestration/composer/llm_feedback_composer_config.dev.json`)
+
 ## Deploy to Composer
 
 1. Upload DAG:
@@ -101,3 +114,9 @@ Optional: if your Composer image does not include required providers, upload `or
 - It relies on per-stage manifest files to avoid duplicate writes.
 - It does not invoke local scripts from this repo; Composer calls Dataproc APIs directly.
 - The full E2E DAG creates source CSV/JSON files and ingests them before Dataproc stages.
+
+## Troubleshooting failed run counts
+
+- If you see multiple failures like `4` or `1` for a task group, check task retries and mapped tasks first.
+- Both DAGs use `default_args={"retries": 1}` and dynamic task mapping (`expand_kwargs`), so one root cause can appear as several failed task instances.
+- The most common root cause is missing/incomplete Airflow Variable `llm_feedback_composer_config`.
