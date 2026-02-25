@@ -454,6 +454,11 @@ def build_dataproc_submit_plan(
     }
 
 
+@task
+def get_submit_list(plan: dict[str, list[dict[str, Any]]], stage_key: str) -> list[dict[str, Any]]:
+    return plan.get(stage_key, [])
+
+
 @dag(
     dag_id=DAG_ID,
     schedule="0 * * * *",
@@ -473,9 +478,13 @@ def llm_feedback_full_e2e_composer() -> None:
     ingested_runs = ingest_generated_batches(config=config, ingest_date=ingest_date, source_batches=source_batches)
     submit_plan = build_dataproc_submit_plan(config=config, ingest_date=ingest_date, ingested_runs=ingested_runs)
 
-    bronze_submit = DataprocCreateBatchOperator.partial(task_id="bronze_submit").expand_kwargs(submit_plan["bronze_submit"])
-    silver_submit = DataprocCreateBatchOperator.partial(task_id="silver_submit").expand_kwargs(submit_plan["silver_submit"])
-    gold_submit = DataprocCreateBatchOperator.partial(task_id="gold_submit").expand_kwargs(submit_plan["gold_submit"])
+    bronze_submit_kwargs = get_submit_list(plan=submit_plan, stage_key="bronze_submit")
+    silver_submit_kwargs = get_submit_list(plan=submit_plan, stage_key="silver_submit")
+    gold_submit_kwargs = get_submit_list(plan=submit_plan, stage_key="gold_submit")
+
+    bronze_submit = DataprocCreateBatchOperator.partial(task_id="bronze_submit").expand_kwargs(bronze_submit_kwargs)
+    silver_submit = DataprocCreateBatchOperator.partial(task_id="silver_submit").expand_kwargs(silver_submit_kwargs)
+    gold_submit = DataprocCreateBatchOperator.partial(task_id="gold_submit").expand_kwargs(gold_submit_kwargs)
 
     start >> config >> ingest_date >> source_batches >> ingested_runs >> submit_plan
     submit_plan >> bronze_submit >> silver_submit >> gold_submit >> done

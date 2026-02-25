@@ -233,6 +233,11 @@ def build_stage_plan(
     }
 
 
+@task
+def get_submit_list(plan: dict[str, list[dict[str, Any]]], stage_key: str) -> list[dict[str, Any]]:
+    return plan.get(stage_key, [])
+
+
 @dag(
     dag_id=DAG_ID,
     schedule="*/15 * * * *",
@@ -251,26 +256,33 @@ def llm_feedback_dataproc_orchestration() -> None:
     run_ids = discover_run_ids(config=config, ingest_date=ingest_date)
     plan = build_stage_plan(config=config, ingest_date=ingest_date, run_ids=run_ids)
 
-    bronze_submit = DataprocCreateBatchOperator.partial(task_id="bronze_submit").expand_kwargs(plan["bronze_submit"])
+    bronze_submit_kwargs = get_submit_list(plan=plan, stage_key="bronze_submit")
+    silver_from_bronze_submit_kwargs = get_submit_list(plan=plan, stage_key="silver_from_bronze_submit")
+    silver_only_submit_kwargs = get_submit_list(plan=plan, stage_key="silver_only_submit")
+    gold_from_bronze_submit_kwargs = get_submit_list(plan=plan, stage_key="gold_from_bronze_submit")
+    gold_from_silver_only_submit_kwargs = get_submit_list(plan=plan, stage_key="gold_from_silver_only_submit")
+    gold_only_submit_kwargs = get_submit_list(plan=plan, stage_key="gold_only_submit")
+
+    bronze_submit = DataprocCreateBatchOperator.partial(task_id="bronze_submit").expand_kwargs(bronze_submit_kwargs)
 
     silver_from_bronze_submit = DataprocCreateBatchOperator.partial(
         task_id="silver_from_bronze_submit"
-    ).expand_kwargs(plan["silver_from_bronze_submit"])
+    ).expand_kwargs(silver_from_bronze_submit_kwargs)
 
     silver_only_submit = DataprocCreateBatchOperator.partial(task_id="silver_only_submit").expand_kwargs(
-        plan["silver_only_submit"]
+        silver_only_submit_kwargs
     )
 
     gold_from_bronze_submit = DataprocCreateBatchOperator.partial(task_id="gold_from_bronze_submit").expand_kwargs(
-        plan["gold_from_bronze_submit"]
+        gold_from_bronze_submit_kwargs
     )
 
     gold_from_silver_only_submit = DataprocCreateBatchOperator.partial(
         task_id="gold_from_silver_only_submit"
-    ).expand_kwargs(plan["gold_from_silver_only_submit"])
+    ).expand_kwargs(gold_from_silver_only_submit_kwargs)
 
     gold_only_submit = DataprocCreateBatchOperator.partial(task_id="gold_only_submit").expand_kwargs(
-        plan["gold_only_submit"]
+        gold_only_submit_kwargs
     )
 
     start >> config >> ingest_date >> run_ids >> plan
