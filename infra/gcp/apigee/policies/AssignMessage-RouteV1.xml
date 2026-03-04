@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage async="false" continueOnError="false" enabled="true" name="AssignMessage-RouteV1">
+  <DisplayName>Assign Route V1</DisplayName>
+  <Set>
+    <Headers>
+      <Header name="x-agent-api-version">v1</Header>
+      <Header name="x-agent-read-only">true</Header>
+    </Headers>
+  </Set>
+  <AssignTo createNew="false" transport="http" type="request"/>
+</AssignMessage>

@@ -53,6 +53,9 @@ Runs the full dev flow in sequence:
 - `BQ_DATASET` (default: `gold`)
 - `BUILD_STAR_SCHEMA=true|false` (default: `false`)
 - `INGEST_DATE_UTC` (default: current UTC date)
+- `FORCE_REPROCESS=true|false` (default: `false`) — passes `--force` to Bronze/Silver/Gold jobs
+- `CODE_VERSION` (default: `unknown`) — propagated to manifests and ops rows
+- `OPS_DATASET` (default: `ops`) — target dataset for ops table writes
 
 ### Example
 

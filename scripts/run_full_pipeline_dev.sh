@@ -25,6 +25,9 @@ set -euo pipefail
 #   BQ_DATASET (required only if PUBLISH_BIGQUERY=true, default: gold)
 #   BUILD_STAR_SCHEMA (default: false)
 #   DATAPROC_PROPERTIES (optional spark properties override)
+#   FORCE_REPROCESS=true|false (default: false)
+#   CODE_VERSION (default: unknown)
+#   OPS_DATASET (default: ops)
 
 : "${PROJECT_ID:?PROJECT_ID is required}"
 : "${REGION:?REGION is required}"
@@ -46,6 +49,9 @@ BQ_PROJECT="${BQ_PROJECT:-$PROJECT_ID}"
 BQ_DATASET="${BQ_DATASET:-gold}"
 BUILD_STAR_SCHEMA="${BUILD_STAR_SCHEMA:-false}"
 DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-spark.dynamicAllocation.enabled=false,spark.executor.instances=2,spark.executor.cores=4,spark.driver.cores=4}"
+FORCE_REPROCESS="${FORCE_REPROCESS:-false}"
+CODE_VERSION="${CODE_VERSION:-unknown}"
+OPS_DATASET="${OPS_DATASET:-ops}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -102,7 +108,9 @@ run_ingestion_capture() {
     --source-type "$source_type" \
     --pod-name "$POD_NAME" \
     --pod-type "$POD_TYPE" \
-    --task-type "$TASK_TYPE")"
+    --task-type "$TASK_TYPE" \
+    --code-version "$CODE_VERSION" \
+    --ops-dataset "$OPS_DATASET")"
   echo "$output"
 }
 
@@ -116,6 +124,9 @@ run_dataproc_bronze() {
   SERVICE_ACCOUNT="$SERVICE_ACCOUNT" \
   ENV_NAME="$ENV_NAME" \
   DATAPROC_PROPERTIES="$DATAPROC_PROPERTIES" \
+  FORCE_REPROCESS="$FORCE_REPROCESS" \
+  CODE_VERSION="$CODE_VERSION" \
+  OPS_DATASET="$OPS_DATASET" \
   RUN_ID="$run_id" \
   INGEST_DATE="$INGEST_DATE_UTC" \
   bash scripts/run_bronze_dataproc.sh
@@ -131,6 +142,9 @@ run_dataproc_silver() {
   SERVICE_ACCOUNT="$SERVICE_ACCOUNT" \
   ENV_NAME="$ENV_NAME" \
   DATAPROC_PROPERTIES="$DATAPROC_PROPERTIES" \
+  FORCE_REPROCESS="$FORCE_REPROCESS" \
+  CODE_VERSION="$CODE_VERSION" \
+  OPS_DATASET="$OPS_DATASET" \
   RUN_ID="$run_id" \
   INGEST_DATE="$INGEST_DATE_UTC" \
   bash scripts/run_silver_dataproc.sh
@@ -148,6 +162,9 @@ run_dataproc_gold() {
     SERVICE_ACCOUNT="$SERVICE_ACCOUNT" \
     ENV_NAME="$ENV_NAME" \
     DATAPROC_PROPERTIES="$DATAPROC_PROPERTIES" \
+    FORCE_REPROCESS="$FORCE_REPROCESS" \
+    CODE_VERSION="$CODE_VERSION" \
+    OPS_DATASET="$OPS_DATASET" \
     RUN_ID="$run_id" \
     INGEST_DATE="$INGEST_DATE_UTC" \
     PUBLISH_BIGQUERY="true" \
@@ -162,6 +179,9 @@ run_dataproc_gold() {
     SERVICE_ACCOUNT="$SERVICE_ACCOUNT" \
     ENV_NAME="$ENV_NAME" \
     DATAPROC_PROPERTIES="$DATAPROC_PROPERTIES" \
+    FORCE_REPROCESS="$FORCE_REPROCESS" \
+    CODE_VERSION="$CODE_VERSION" \
+    OPS_DATASET="$OPS_DATASET" \
     RUN_ID="$run_id" \
     INGEST_DATE="$INGEST_DATE_UTC" \
     bash scripts/run_gold_dataproc.sh

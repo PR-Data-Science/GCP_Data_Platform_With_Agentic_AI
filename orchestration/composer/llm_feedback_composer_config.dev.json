@@ -20,10 +20,13 @@
   "auto_batch_id": "python_training_version1_LLMrated_batch",
   "human_batch_id": "python_training_version1_HUMANrated_batch",
   "record_count_per_batch": 12,
+  "code_version": "unknown",
+  "ops_dataset": "ops",
+  "force_reprocess": false,
   "dataproc_properties": {
     "spark.dynamicAllocation.enabled": "false",
-    "spark.executor.instances": "1",
-    "spark.executor.cores": "2",
-    "spark.driver.cores": "1"
+    "spark.executor.instances": "2",
+    "spark.executor.cores": "4",
+    "spark.driver.cores": "4"
   }
 }

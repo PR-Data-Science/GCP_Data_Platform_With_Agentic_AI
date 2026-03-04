@@ -116,6 +116,9 @@ def load_config() -> dict[str, Any]:
     config.setdefault("auto_batch_id", "python_training_version1_LLMrated_batch")
     config.setdefault("human_batch_id", "python_training_version1_HUMANrated_batch")
     config.setdefault("record_count_per_batch", 12)
+    config.setdefault("code_version", "unknown")
+    config.setdefault("ops_dataset", "ops")
+    config.setdefault("force_reprocess", False)
     config.setdefault(
         "dataproc_properties",
         {
@@ -135,6 +138,20 @@ def resolve_ingest_date() -> str:
     if dag_run and dag_run.conf and dag_run.conf.get("ingest_date"):
         return dag_run.conf["ingest_date"]
     return context["data_interval_end"].in_timezone("UTC").format("YYYY-MM-DD")
+
+
+@task
+def resolve_force_reprocess(config: dict[str, Any]) -> bool:
+    context = get_current_context()
+    dag_run = context.get("dag_run")
+    if dag_run and dag_run.conf and "force_reprocess" in dag_run.conf:
+        value = dag_run.conf.get("force_reprocess")
+    else:
+        value = config.get("force_reprocess", False)
+
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 @task
@@ -337,6 +354,7 @@ def build_dataproc_submit_plan(
     config: dict[str, Any],
     ingest_date: str,
     ingested_runs: list[dict[str, Any]],
+    force_reprocess: bool,
 ) -> dict[str, list[dict[str, Any]]]:
     bronze_prefix = str(config["bronze_prefix"]).strip("/")
     silver_prefix = str(config["silver_prefix"]).strip("/")
@@ -374,8 +392,11 @@ def build_dataproc_submit_plan(
                             f"--raw_prefix={str(config['raw_prefix']).strip('/')}/",
                             f"--bronze_prefix={bronze_prefix}/",
                             "--mode=append",
+                            f"--code_version={config['code_version']}",
+                            f"--ops_dataset={config['ops_dataset']}",
                             f"--run_id={run_id}",
                             f"--ingest_date={ingest_date}",
+                            *(["--force"] if force_reprocess else []),
                         ],
                     },
                     "environment_config": {
@@ -404,8 +425,11 @@ def build_dataproc_submit_plan(
                             f"--bronze_prefix={bronze_prefix}/",
                             f"--silver_prefix={silver_prefix}/",
                             "--mode=append",
+                            f"--code_version={config['code_version']}",
+                            f"--ops_dataset={config['ops_dataset']}",
                             f"--run_id={run_id}",
                             f"--ingest_date={ingest_date}",
+                            *(["--force"] if force_reprocess else []),
                         ],
                     },
                     "environment_config": {
@@ -433,8 +457,11 @@ def build_dataproc_submit_plan(
                             f"--gold_bucket={config['gold_bucket']}",
                             f"--silver_prefix={silver_prefix}/",
                             f"--gold_prefix={gold_prefix}/",
+                            f"--code_version={config['code_version']}",
+                            f"--ops_dataset={config['ops_dataset']}",
                             f"--run_id={run_id}",
                             f"--ingest_date={ingest_date}",
+                            *(["--force"] if force_reprocess else []),
                         ],
                     },
                     "environment_config": {
@@ -474,9 +501,15 @@ def llm_feedback_full_e2e_composer() -> None:
 
     config = load_config()
     ingest_date = resolve_ingest_date()
+    force_reprocess = resolve_force_reprocess(config=config)
     source_batches = generate_source_batches(config=config, ingest_date=ingest_date)
     ingested_runs = ingest_generated_batches(config=config, ingest_date=ingest_date, source_batches=source_batches)
-    submit_plan = build_dataproc_submit_plan(config=config, ingest_date=ingest_date, ingested_runs=ingested_runs)
+    submit_plan = build_dataproc_submit_plan(
+        config=config,
+        ingest_date=ingest_date,
+        ingested_runs=ingested_runs,
+        force_reprocess=force_reprocess,
+    )
 
     bronze_submit_kwargs = get_submit_list(plan=submit_plan, stage_key="bronze_submit")
     silver_submit_kwargs = get_submit_list(plan=submit_plan, stage_key="silver_submit")
@@ -487,6 +520,7 @@ def llm_feedback_full_e2e_composer() -> None:
     gold_submit = DataprocCreateBatchOperator.partial(task_id="gold_submit").expand_kwargs(gold_submit_kwargs)
 
     start >> config >> ingest_date >> source_batches >> ingested_runs >> submit_plan
+    config >> force_reprocess >> submit_plan
     submit_plan >> bronze_submit >> silver_submit >> gold_submit >> done
 
 

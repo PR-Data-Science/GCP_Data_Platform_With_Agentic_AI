@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Quota async="false" continueOnError="false" enabled="true" name="Quota-PerClient" type="calendar">
+  <DisplayName>Quota Per Client</DisplayName>
+  <Allow count="600" countRef="verifyapikey.Verify-API-Key.apiproduct.developer.quota.limit"/>
+  <Interval ref="verifyapikey.Verify-API-Key.apiproduct.developer.quota.interval">1</Interval>
+  <TimeUnit ref="verifyapikey.Verify-API-Key.apiproduct.developer.quota.timeunit">minute</TimeUnit>
+  <Identifier ref="request.header.x-api-key"/>
+  <Distributed>true</Distributed>
+  <Synchronous>false</Synchronous>
+  <StartTime>2026-01-01 00:00:00</StartTime>
+</Quota>

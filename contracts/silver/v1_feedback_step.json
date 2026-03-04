@@ -1,0 +1,22 @@
+{
+  "contract_name": "feedback_step",
+  "version": "v1",
+  "layer": "silver",
+  "primary_keys": ["run_id", "record_hash"],
+  "required_fields": [
+    "ingest_date",
+    "run_id",
+    "record_hash",
+    "schema_hash",
+    "prompt_id",
+    "evaluated_step_index"
+  ],
+  "lineage_fields": [
+    "run_id",
+    "ingest_ts",
+    "schema_hash",
+    "record_hash",
+    "raw_path"
+  ],
+  "notes": "Starter snapshot. Extend with full field-level typing as implementation hardening proceeds."
+}

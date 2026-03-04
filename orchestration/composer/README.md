@@ -6,11 +6,12 @@ This folder contains a Composer-ready Airflow DAG for orchestrating Dataproc Ser
 
 - File: `dags/llm_feedback_dataproc_orchestration.py`
 - DAG ID: `llm_feedback_dataproc_orchestration`
-- Schedule: every 15 minutes
+- Schedule: daily (`0 0 * * *`)
 - Behavior:
   - discovers `run_id`s from raw JSONL objects for one `ingest_date`
   - checks Bronze/Silver/Gold manifests
   - runs only missing stages per `run_id`
+  - supports `force_reprocess` to bypass manifest-skip planning and submit all stages for discovered runs
   - enforces stage dependencies:
     - Bronze -> Silver -> Gold
     - Silver -> Gold
@@ -20,7 +21,7 @@ This folder contains a Composer-ready Airflow DAG for orchestrating Dataproc Ser
 
   - File: `dags/llm_feedback_full_e2e_composer.py`
   - DAG ID: `llm_feedback_full_e2e_composer`
-  - Schedule: hourly
+  - Schedule: daily (`0 0 * * *`)
   - Behavior:
     - generates sample source batches in both formats:
       - JSON batch (`source_type=json`)
@@ -61,6 +62,9 @@ Example value:
   "auto_batch_id": "python_training_version1_LLMrated_batch",
   "human_batch_id": "python_training_version1_HUMANrated_batch",
   "record_count_per_batch": 12,
+  "code_version": "unknown",
+  "ops_dataset": "ops",
+  "force_reprocess": false,
   "dataproc_properties": {
     "spark.dynamicAllocation.enabled": "false",
     "spark.executor.instances": "2",
@@ -102,7 +106,8 @@ Optional: if your Composer image does not include required providers, upload `or
 
 ```json
 {
-  "ingest_date": "2026-02-22"
+  "ingest_date": "2026-02-22",
+  "force_reprocess": true
 }
 ```
 
@@ -111,7 +116,7 @@ Optional: if your Composer image does not include required providers, upload `or
 ## Notes
 
 - This DAG starts from the raw layer and orchestrates Bronze/Silver/Gold transforms.
-- It relies on per-stage manifest files to avoid duplicate writes.
+- It relies on per-stage manifest files (`manifests/<stage>/dt=<date>/run_id=<run_id>/manifest.json`) to avoid duplicate writes by default.
 - It does not invoke local scripts from this repo; Composer calls Dataproc APIs directly.
 - The full E2E DAG creates source CSV/JSON files and ingests them before Dataproc stages.
 

@@ -46,6 +46,9 @@ def load_config() -> dict[str, Any]:
     config.setdefault("bronze_prefix", "bronze")
     config.setdefault("silver_prefix", "silver")
     config.setdefault("gold_prefix", "gold")
+    config.setdefault("code_version", "unknown")
+    config.setdefault("ops_dataset", "ops")
+    config.setdefault("force_reprocess", False)
     config.setdefault("dataproc_properties", {
         "spark.dynamicAllocation.enabled": "false",
         "spark.executor.instances": "2",
@@ -64,6 +67,20 @@ def resolve_ingest_date() -> str:
         return dag_run.conf["ingest_date"]
 
     return context["data_interval_end"].in_timezone("UTC").format("YYYY-MM-DD")
+
+
+@task
+def resolve_force_reprocess(config: dict[str, Any]) -> bool:
+    context = get_current_context()
+    dag_run = context.get("dag_run")
+    if dag_run and dag_run.conf and "force_reprocess" in dag_run.conf:
+        value = dag_run.conf.get("force_reprocess")
+    else:
+        value = config.get("force_reprocess", False)
+
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 @task
@@ -91,6 +108,7 @@ def build_stage_plan(
     config: dict[str, Any],
     ingest_date: str,
     run_ids: list[str],
+    force_reprocess: bool,
 ) -> dict[str, list[dict[str, Any]]]:
     hook = GCSHook(gcp_conn_id=config["gcp_conn_id"])
 
@@ -106,23 +124,26 @@ def build_stage_plan(
     silver_only: list[str] = []
     gold_only: list[str] = []
 
-    for run_id in run_ids:
-        bronze_manifest = f"{bronze_prefix}/ingest_date={ingest_date}/_manifests/run_id={run_id}.json"
-        silver_manifest = f"{silver_prefix}/ingest_date={ingest_date}/_manifests/run_id={run_id}.json"
-        gold_manifest = f"{gold_prefix}/ingest_date={ingest_date}/_manifests/run_id={run_id}.json"
+    if force_reprocess:
+        all_stages = list(run_ids)
+    else:
+        for run_id in run_ids:
+            bronze_manifest = f"manifests/bronze/dt={ingest_date}/run_id={run_id}/manifest.json"
+            silver_manifest = f"manifests/silver/dt={ingest_date}/run_id={run_id}/manifest.json"
+            gold_manifest = f"manifests/gold/dt={ingest_date}/run_id={run_id}/manifest.json"
 
-        has_bronze = hook.exists(bucket_name=config["bronze_bucket"], object_name=bronze_manifest)
-        has_silver = hook.exists(bucket_name=config["silver_bucket"], object_name=silver_manifest)
-        has_gold = hook.exists(bucket_name=config["gold_bucket"], object_name=gold_manifest)
+            has_bronze = hook.exists(bucket_name=config["bronze_bucket"], object_name=bronze_manifest)
+            has_silver = hook.exists(bucket_name=config["silver_bucket"], object_name=silver_manifest)
+            has_gold = hook.exists(bucket_name=config["gold_bucket"], object_name=gold_manifest)
 
-        if has_gold:
-            continue
-        if has_silver:
-            gold_only.append(run_id)
-        elif has_bronze:
-            silver_only.append(run_id)
-        else:
-            all_stages.append(run_id)
+            if has_gold:
+                continue
+            if has_silver:
+                gold_only.append(run_id)
+            elif has_bronze:
+                silver_only.append(run_id)
+            else:
+                all_stages.append(run_id)
 
     common_runtime = {
         "version": config.get("runtime_version", "2.2"),
@@ -137,9 +158,13 @@ def build_stage_plan(
             f"--raw_prefix={bronze_prefix}/",
             f"--bronze_prefix={bronze_prefix}/",
             "--mode=append",
+            f"--code_version={config['code_version']}",
+            f"--ops_dataset={config['ops_dataset']}",
             f"--run_id={run_id}",
             f"--ingest_date={ingest_date}",
         ]
+        if force_reprocess:
+            args.append("--force")
         return {
             "pyspark_batch": {
                 "main_python_file_uri": bronze_job_uri,
@@ -161,9 +186,13 @@ def build_stage_plan(
             f"--bronze_prefix={bronze_prefix}/",
             f"--silver_prefix={silver_prefix}/",
             "--mode=append",
+            f"--code_version={config['code_version']}",
+            f"--ops_dataset={config['ops_dataset']}",
             f"--run_id={run_id}",
             f"--ingest_date={ingest_date}",
         ]
+        if force_reprocess:
+            args.append("--force")
         return {
             "pyspark_batch": {
                 "main_python_file_uri": silver_job_uri,
@@ -184,9 +213,13 @@ def build_stage_plan(
             f"--gold_bucket={config['gold_bucket']}",
             f"--silver_prefix={silver_prefix}/",
             f"--gold_prefix={gold_prefix}/",
+            f"--code_version={config['code_version']}",
+            f"--ops_dataset={config['ops_dataset']}",
             f"--run_id={run_id}",
             f"--ingest_date={ingest_date}",
         ]
+        if force_reprocess:
+            args.append("--force")
         return {
             "pyspark_batch": {
                 "main_python_file_uri": gold_job_uri,
@@ -253,8 +286,14 @@ def llm_feedback_dataproc_orchestration() -> None:
 
     config = load_config()
     ingest_date = resolve_ingest_date()
+    force_reprocess = resolve_force_reprocess(config=config)
     run_ids = discover_run_ids(config=config, ingest_date=ingest_date)
-    plan = build_stage_plan(config=config, ingest_date=ingest_date, run_ids=run_ids)
+    plan = build_stage_plan(
+        config=config,
+        ingest_date=ingest_date,
+        run_ids=run_ids,
+        force_reprocess=force_reprocess,
+    )
 
     bronze_submit_kwargs = get_submit_list(plan=plan, stage_key="bronze_submit")
     silver_from_bronze_submit_kwargs = get_submit_list(plan=plan, stage_key="silver_from_bronze_submit")
@@ -286,6 +325,7 @@ def llm_feedback_dataproc_orchestration() -> None:
     )
 
     start >> config >> ingest_date >> run_ids >> plan
+    config >> force_reprocess >> plan
 
     plan >> bronze_submit >> silver_from_bronze_submit >> gold_from_bronze_submit >> done
     plan >> silver_only_submit >> gold_from_silver_only_submit >> done

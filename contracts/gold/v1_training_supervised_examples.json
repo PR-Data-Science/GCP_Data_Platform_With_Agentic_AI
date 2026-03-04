@@ -1,0 +1,20 @@
+{
+  "contract_name": "training_supervised_examples",
+  "version": "v1",
+  "layer": "gold",
+  "primary_keys": ["run_id", "prompt_id"],
+  "required_fields": [
+    "ingest_date",
+    "run_id",
+    "prompt_id",
+    "task_type",
+    "final_answer"
+  ],
+  "lineage_fields": [
+    "run_id",
+    "ingest_ts",
+    "schema_hash",
+    "record_hash"
+  ],
+  "notes": "Starter snapshot. Extend with complete metric columns and constraints."
+}

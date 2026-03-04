@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Iterable, Optional
 
+from src.ops.ops_writer import write_deadletter_summary, write_dq_results, write_pipeline_runs, write_schema_registry_first_seen
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
@@ -84,6 +85,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ingest_date", default=None, help="Optional ingest_date (YYYY-MM-DD).")
     parser.add_argument("--batch_name", default=None, help="Optional batch_name / batch_id filter.")
     parser.add_argument("--mode", choices=["append"], default="append", help="Write mode.")
+    parser.add_argument("--force", action="store_true", help="Force reprocess even if stage manifest exists.")
+    parser.add_argument("--code_version", default="unknown", help="Code version pointer (for example git SHA).")
+    parser.add_argument("--ops_dataset", default="ops", help="BigQuery dataset for ops control plane tables.")
     return parser.parse_args()
 
 
@@ -216,6 +220,36 @@ def apply_dq(df: DataFrame) -> DataFrame:
 
     dq_reasons = F.filter(F.array(*reasons), lambda reason: reason.isNotNull())
     return df.withColumn("dq_reasons", dq_reasons).withColumn("dq_pass", F.size(dq_reasons) == 0)
+
+
+def dq_reason_to_rule_id(reason_col: F.Column) -> F.Column:
+    return (
+        F.when(reason_col == F.lit("missing_run_id"), F.lit("DQ_RUN_ID_REQUIRED"))
+        .when(reason_col == F.lit("missing_record_hash"), F.lit("DQ_RECORD_HASH_REQUIRED"))
+        .when(reason_col == F.lit("missing_prompt_id"), F.lit("DQ_PROMPT_ID_REQUIRED"))
+        .when(reason_col == F.lit("missing_query_text"), F.lit("DQ_QUERY_TEXT_REQUIRED"))
+        .when(reason_col.isin("missing_evaluated_step_index", "invalid_evaluated_step_index"), F.lit("DQ_EVALUATED_STEP_INDEX_VALID"))
+        .when(reason_col == F.lit("invalid_final_overall_label"), F.lit("DQ_FINAL_OVERALL_LABEL_ALLOWED"))
+        .when(reason_col.startswith("out_of_range_"), F.lit("DQ_METRIC_RANGE_0_5"))
+        .otherwise(F.lit("DQ_UNKNOWN"))
+    )
+
+
+def dq_rule_id_to_severity(rule_id_col: F.Column) -> F.Column:
+    return (
+        F.when(rule_id_col.isin("DQ_RUN_ID_REQUIRED", "DQ_RECORD_HASH_REQUIRED"), F.lit("CRITICAL"))
+        .when(
+            rule_id_col.isin(
+                "DQ_PROMPT_ID_REQUIRED",
+                "DQ_QUERY_TEXT_REQUIRED",
+                "DQ_EVALUATED_STEP_INDEX_VALID",
+                "DQ_FINAL_OVERALL_LABEL_ALLOWED",
+                "DQ_METRIC_RANGE_0_5",
+            ),
+            F.lit("HIGH"),
+        )
+        .otherwise(F.lit("MEDIUM"))
+    )
 
 
 def build_feedback_step(df: DataFrame) -> DataFrame:
@@ -361,14 +395,31 @@ def write_table(df: DataFrame, root: str, table_name: str) -> None:
         return
     (
         df.write.mode("append")
-        .partitionBy("ingest_date")
+        .partitionBy("ingest_date", "run_id")
         .parquet(f"{root.rstrip('/')}/{table_name}")
     )
+
+
+def normalize_complex_to_json_strings(df: DataFrame) -> DataFrame:
+    complex_cols = [
+        "curator_1_rating",
+        "curator_2_rating",
+        "reviewer_curator_1_rating",
+        "reviewer_curator_2_rating",
+        "auto_rater",
+        "execution_json",
+        "violations",
+    ]
+    for col_name in complex_cols:
+        if col_name in df.columns:
+            df = df.withColumn(col_name, F.to_json(F.col(col_name)))
+    return df
 
 
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    started_at = datetime.utcnow()
 
     bronze_bucket = args.bronze_bucket or args.gcs_bucket
     silver_bucket = args.silver_bucket or args.gcs_bucket
@@ -376,12 +427,37 @@ def main() -> None:
         raise ValueError("Provide --bronze_bucket and --silver_bucket, or use --gcs_bucket as fallback.")
 
     spark = SparkSession.builder.appName("silver_transform_dataproc").getOrCreate()
+    spark.conf.set("spark.sql.parquet.enableVectorizedReader", "false")
 
     bronze_root = f"gs://{bronze_bucket}/{normalize_prefix(args.bronze_prefix)}"
     silver_root = f"gs://{silver_bucket}/{normalize_prefix(args.silver_prefix).rstrip('/')}"
 
     logging.info("Reading bronze parquet from %s", bronze_root)
-    df = spark.read.parquet(bronze_root)
+    if args.ingest_date:
+        candidate_paths = [
+            f"{bronze_root.rstrip('/')}/ingest_date={args.ingest_date}/source_type=csv",
+            f"{bronze_root.rstrip('/')}/ingest_date={args.ingest_date}/source_type=json",
+            f"{bronze_root.rstrip('/')}/ingest_date={args.ingest_date}/source_type=unknown",
+        ]
+        existing_paths = [path for path in candidate_paths if path_exists(spark, path)]
+        if existing_paths:
+            frames = [
+                normalize_complex_to_json_strings(
+                    spark.read.option("basePath", bronze_root.rstrip("/")).parquet(path)
+                )
+                for path in existing_paths
+            ]
+            df = frames[0]
+            for frame in frames[1:]:
+                df = df.unionByName(frame, allowMissingColumns=True)
+        else:
+            df = normalize_complex_to_json_strings(
+                spark.read.option("basePath", bronze_root.rstrip("/")).parquet(
+                    f"{bronze_root.rstrip('/')}/ingest_date={args.ingest_date}"
+                )
+            )
+    else:
+        df = normalize_complex_to_json_strings(spark.read.parquet(bronze_root))
 
     if args.run_id:
         df = df.filter(F.col("run_id") == args.run_id)
@@ -399,12 +475,19 @@ def main() -> None:
     ingest_date_value = resolve_single_value(df, "ingest_date", args.ingest_date)
     run_id_value = resolve_single_value(df, "run_id", args.run_id)
 
-    manifest_path = f"{silver_root}/ingest_date={ingest_date_value}/_manifests/run_id={run_id_value}.json"
-    if path_exists(spark, manifest_path):
-        raise ValueError(
-            f"run_id {run_id_value} already processed for ingest_date={ingest_date_value}; "
-            "aborting to prevent duplicate append writes."
+    manifest_path = (
+        f"gs://{silver_bucket}/manifests/silver/dt={ingest_date_value}/run_id={run_id_value}/manifest.json"
+    )
+    if path_exists(spark, manifest_path) and not args.force:
+        logging.info(
+            "Silver stage manifest exists for run_id=%s ingest_date=%s; skipping stage (use --force to reprocess).",
+            run_id_value,
+            ingest_date_value,
         )
+        spark.stop()
+        return
+
+    input_count = df.count()
 
     df = df.dropDuplicates(["run_id", "record_hash"])
     df = trim_string_columns(df)
@@ -422,19 +505,33 @@ def main() -> None:
     df = with_final_scores(df)
     df = apply_dq(df)
 
+    failed_records_df = df.filter(~F.col("dq_pass"))
+
+    deadletter_base_df = failed_records_df.select(
+        "ingest_date",
+        "run_id",
+        "record_hash",
+        "raw_path",
+        "prompt_id",
+        "evaluated_step_index",
+        F.explode_outer("dq_reasons").alias("failure_reason"),
+        F.to_json(F.struct(*[F.col(c) for c in df.columns if c not in {"dq_reasons", "dq_pass"}])).alias("raw_record_json"),
+    )
+
     deadletter_df = (
-        df.filter(~F.col("dq_pass"))
-        .select(
-            "ingest_date",
-            "run_id",
-            "record_hash",
-            "raw_path",
-            "prompt_id",
-            "evaluated_step_index",
-            "dq_reasons",
-            F.to_json(F.struct(*[F.col(c) for c in df.columns if c not in {"dq_reasons", "dq_pass"}])).alias("raw_record_json"),
-            F.current_timestamp().alias("silver_processed_ts"),
+        deadletter_base_df
+        .withColumn("rule_id", dq_reason_to_rule_id(F.col("failure_reason")))
+        .withColumn("severity", dq_rule_id_to_severity(F.col("rule_id")))
+        .withColumn(
+            "evidence_ref",
+            F.concat(
+                F.lit("raw_path="),
+                F.coalesce(F.col("raw_path"), F.lit("unknown")),
+                F.lit(";record_hash="),
+                F.coalesce(F.col("record_hash"), F.lit("unknown")),
+            ),
         )
+        .withColumn("silver_processed_ts", F.current_timestamp())
     )
 
     clean_df = df.filter(F.col("dq_pass"))
@@ -455,20 +552,126 @@ def main() -> None:
         "ratings_long": ratings_long_df.count(),
         "execution_steps": execution_steps_df.count(),
         "violations": violations_df.count(),
-        "deadletter": deadletter_df.count(),
+        "deadletter": failed_records_df.count(),
+        "deadletter_rule_violations": deadletter_df.count(),
     }
+
+    deadletter_summary_df = (
+        deadletter_df.groupBy("run_id", "rule_id", "failure_reason")
+        .agg(F.count(F.lit(1)).alias("count"))
+        .withColumn("stage", F.lit("silver"))
+        .withColumn("created_ts", F.current_timestamp())
+        .select("run_id", "stage", "rule_id", "failure_reason", "count", "created_ts")
+    )
+
+    summary_rows = [row.asDict(recursive=True) for row in deadletter_summary_df.collect()]
+    try:
+        write_deadletter_summary(summary_rows, dataset=args.ops_dataset)
+    except Exception as exc:
+        logging.warning("Failed to write deadletter summary to BigQuery ops table: %s", exc)
+
+    dq_results_df = (
+        deadletter_df.groupBy("run_id", "rule_id", "severity")
+        .agg(
+            F.count(F.lit(1)).alias("failed_count"),
+            F.slice(F.array_sort(F.collect_set("record_hash")), 1, 20).alias("sample_record_hashes"),
+        )
+        .withColumn("stage", F.lit("silver"))
+        .withColumn("table_name", F.lit("feedback_step"))
+        .withColumn("dq_pass", F.lit(False))
+        .withColumn("created_ts", F.current_timestamp())
+        .select(
+            "run_id",
+            "stage",
+            "table_name",
+            "rule_id",
+            "severity",
+            "failed_count",
+            "sample_record_hashes",
+            "dq_pass",
+            "created_ts",
+        )
+    )
+
+    dq_result_rows = [row.asDict(recursive=True) for row in dq_results_df.collect()]
+    try:
+        write_dq_results(dq_result_rows, dataset=args.ops_dataset)
+    except Exception as exc:
+        logging.warning("Failed to write DQ results to BigQuery ops table: %s", exc)
+
+    finished_at = datetime.utcnow()
+    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    schema_hash_value = df.select("schema_hash").first()["schema_hash"] if "schema_hash" in df.columns else None
+
+    try:
+        if schema_hash_value:
+            write_schema_registry_first_seen(
+                [
+                    {
+                        "schema_hash": schema_hash_value,
+                        "schema_json": feedback_step_df.schema.json(),
+                        "first_seen_run_id": run_id_value,
+                        "source_type": "silver",
+                    }
+                ],
+                dataset=args.ops_dataset,
+            )
+    except Exception as exc:
+        logging.warning("Failed to write silver schema snapshot to ops.schema_registry: %s", exc)
 
     manifest = {
         "run_id": run_id_value,
+        "stage": "silver",
+        "env": args.env,
+        "source_type": "mixed",
+        "input_paths": [bronze_root],
+        "output_paths": [silver_root],
+        "schema_hash": schema_hash_value,
+        "record_count_in": input_count,
+        "record_count_out": counts["feedback_step"],
+        "deadletter_count": counts["deadletter"],
+        "dataproc_batch_id": None,
+        "start_ts": started_at.isoformat() + "Z",
+        "end_ts": finished_at.isoformat() + "Z",
+        "duration_ms": duration_ms,
+        "code_version": args.code_version,
+        "error_category": None,
+        "error_code": None,
         "ingest_date": ingest_date_value,
         "input_path": bronze_root,
         "output_path": silver_root,
         "row_counts": counts,
-        "job_start_ts": datetime.now().isoformat(),
-        "job_end_ts": datetime.now().isoformat(),
+        "job_start_ts": started_at.isoformat() + "Z",
+        "job_end_ts": finished_at.isoformat() + "Z",
     }
     write_manifest(spark, manifest_path, manifest)
     logging.info("Silver manifest written to %s", manifest_path)
+
+    silver_run_row = {
+        "run_id": run_id_value,
+        "stage": "silver",
+        "status": "SUCCEEDED",
+        "start_ts": manifest["start_ts"],
+        "end_ts": manifest["end_ts"],
+        "duration_ms": manifest["duration_ms"],
+        "input_count": manifest["record_count_in"],
+        "output_count": manifest["record_count_out"],
+        "deadletter_count": manifest["deadletter_count"],
+        "schema_hash": schema_hash_value,
+        "dataproc_batch_id": None,
+        "manifest_path": manifest_path,
+        "error_category": None,
+        "error_code": None,
+        "error_summary": None,
+        "code_version": args.code_version,
+        "input_paths": [bronze_root],
+        "output_paths": [silver_root],
+        "partition_keys": [f"ingest_date={ingest_date_value}", f"run_id={run_id_value}"],
+    }
+    try:
+        write_pipeline_runs([silver_run_row], dataset=args.ops_dataset)
+    except Exception as exc:
+        logging.warning("Failed to write silver stage ops row: %s", exc)
 
     spark.stop()
 

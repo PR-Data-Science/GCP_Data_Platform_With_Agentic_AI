@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from typing import Iterable, Optional
 
+from src.ops.ops_writer import write_pipeline_runs, write_schema_registry_first_seen
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
@@ -111,6 +112,9 @@ def parse_args() -> argparse.Namespace:
         default="append",
         help="Write mode. append is supported; overwrite-run is retained for compatibility but disabled.",
     )
+    parser.add_argument("--force", action="store_true", help="Force reprocess even if stage manifest exists.")
+    parser.add_argument("--code_version", default="unknown", help="Code version pointer (for example git SHA).")
+    parser.add_argument("--ops_dataset", default="ops", help="BigQuery dataset for ops control plane tables.")
     return parser.parse_args()
 
 
@@ -167,20 +171,9 @@ def resolve_single_value(df: DataFrame, column: str, provided: Optional[str]) ->
 
 def write_manifest(
     spark: SparkSession,
-    output_path: str,
-    run_id: str,
-    row_count: int,
-    schema_hash: str,
+    manifest_path: str,
+    manifest: dict[str, object],
 ) -> None:
-    manifest = {
-        "run_id": run_id,
-        "output_path": output_path,
-        "row_count": row_count,
-        "schema_hash": schema_hash,
-        "job_start_ts": datetime.now().isoformat(),
-        "job_end_ts": datetime.now().isoformat(),
-    }
-    manifest_path = f"{output_path.rstrip('/')}/_manifests/run_id={run_id}.json"
     payload = f"{json.dumps(manifest)}\n"
 
     hadoop_conf = spark._jsc.hadoopConfiguration()
@@ -208,6 +201,7 @@ def path_exists(spark: SparkSession, uri: str) -> bool:
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    started_at = datetime.utcnow()
 
     raw_bucket = args.raw_bucket or args.gcs_bucket
     bronze_bucket = args.bronze_bucket or args.gcs_bucket
@@ -264,16 +258,21 @@ def main() -> None:
     dedupe_count = df_out.count()
 
     bronze_root = f"gs://{bronze_bucket}/{normalize_prefix(args.bronze_prefix).rstrip('/')}"
-    output_path = f"{bronze_root}/ingest_date={ingest_date_value}/"
-    run_manifest_path = f"{output_path.rstrip('/')}/_manifests/run_id={run_id_value}.json"
+    output_path = f"{bronze_root}/ingest_date={ingest_date_value}/run_id={run_id_value}/"
+    run_manifest_path = (
+        f"gs://{bronze_bucket}/manifests/bronze/dt={ingest_date_value}/run_id={run_id_value}/manifest.json"
+    )
 
-    if path_exists(spark, run_manifest_path):
-        raise ValueError(
-            f"run_id {run_id_value} already processed for ingest_date={ingest_date_value}; "
-            "aborting to prevent duplicate append writes."
+    if path_exists(spark, run_manifest_path) and not args.force:
+        logging.info(
+            "Bronze stage manifest exists for run_id=%s ingest_date=%s; skipping stage (use --force to reprocess).",
+            run_id_value,
+            ingest_date_value,
         )
+        spark.stop()
+        return
 
-    partition_cols = ["ingest_date"]
+    partition_cols = ["ingest_date", "run_id"]
     if "source_type" in df_out.columns:
         partition_cols.append("source_type")
 
@@ -293,13 +292,79 @@ def main() -> None:
     logging.info("Output path: %s", output_path)
 
     # Write manifest JSON
+    finished_at = datetime.utcnow()
+    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    schema_hash_value = df_out.select("schema_hash").first()["schema_hash"]
+    input_paths = [input_glob]
+    output_paths = [output_path]
+
+    manifest_payload = {
+        "run_id": run_id_value,
+        "stage": "bronze",
+        "env": args.env,
+        "source_type": "mixed",
+        "input_paths": input_paths,
+        "output_paths": output_paths,
+        "schema_hash": schema_hash_value,
+        "record_count_in": row_count,
+        "record_count_out": dedupe_count,
+        "deadletter_count": 0,
+        "dataproc_batch_id": None,
+        "start_ts": started_at.isoformat() + "Z",
+        "end_ts": finished_at.isoformat() + "Z",
+        "duration_ms": duration_ms,
+        "code_version": args.code_version,
+        "error_category": None,
+        "error_code": None,
+    }
+
+    try:
+        write_schema_registry_first_seen(
+            [
+                {
+                    "schema_hash": schema_hash_value,
+                    "schema_json": df_out.schema.json(),
+                    "first_seen_run_id": run_id_value,
+                    "source_type": "bronze",
+                }
+            ],
+            dataset=args.ops_dataset,
+        )
+    except Exception as exc:
+        logging.warning("Failed to write bronze schema snapshot to ops.schema_registry: %s", exc)
+
     write_manifest(
         spark,
-        output_path,
-        run_id_value,
-        dedupe_count,
-        df_out.select("schema_hash").first()["schema_hash"],
+        run_manifest_path,
+        manifest_payload,
     )
+
+    bronze_run_row = {
+        "run_id": run_id_value,
+        "stage": "bronze",
+        "status": "SUCCEEDED",
+        "start_ts": manifest_payload["start_ts"],
+        "end_ts": manifest_payload["end_ts"],
+        "duration_ms": manifest_payload["duration_ms"],
+        "input_count": manifest_payload["record_count_in"],
+        "output_count": manifest_payload["record_count_out"],
+        "deadletter_count": 0,
+        "schema_hash": schema_hash_value,
+        "dataproc_batch_id": None,
+        "manifest_path": run_manifest_path,
+        "error_category": None,
+        "error_code": None,
+        "error_summary": None,
+        "code_version": args.code_version,
+        "input_paths": input_paths,
+        "output_paths": output_paths,
+        "partition_keys": [f"ingest_date={ingest_date_value}", f"run_id={run_id_value}"],
+    }
+
+    try:
+        write_pipeline_runs([bronze_run_row], dataset=args.ops_dataset)
+    except Exception as exc:
+        logging.warning("Failed to write bronze stage ops row: %s", exc)
 
     spark.stop()
 

@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional
 
+from src.ops.ops_writer import write_pipeline_runs, write_schema_registry_first_seen
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
@@ -39,6 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--publish_bigquery", action="store_true", help="Publish Gold tables to BigQuery.")
     parser.add_argument("--bq_project", default=None, help="Target BigQuery project id.")
     parser.add_argument("--bq_dataset", default=None, help="Target BigQuery dataset.")
+    parser.add_argument("--force", action="store_true", help="Force reprocess even if stage manifest exists.")
+    parser.add_argument("--code_version", default="unknown", help="Code version pointer (for example git SHA).")
+    parser.add_argument("--ops_dataset", default="ops", help="BigQuery dataset for ops control plane tables.")
     return parser.parse_args()
 
 
@@ -217,7 +221,7 @@ def write_table(df: DataFrame, root: str, table_name: str) -> None:
         return
     (
         df.write.mode("append")
-        .partitionBy("ingest_date")
+        .partitionBy("ingest_date", "run_id")
         .parquet(f"{root.rstrip('/')}/{table_name}")
     )
 
@@ -244,6 +248,7 @@ def maybe_publish_bigquery(args: argparse.Namespace, tables: Dict[str, DataFrame
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    started_at = datetime.utcnow()
 
     silver_bucket = args.silver_bucket or args.gcs_bucket
     gold_bucket = args.gold_bucket or args.gcs_bucket
@@ -274,12 +279,15 @@ def main() -> None:
     ingest_date_value = resolve_single_value(feedback_step, "ingest_date", args.ingest_date)
     run_id_value = resolve_single_value(feedback_step, "run_id", args.run_id)
 
-    manifest_path = f"{gold_root}/ingest_date={ingest_date_value}/_manifests/run_id={run_id_value}.json"
-    if path_exists(spark, manifest_path):
-        raise ValueError(
-            f"run_id {run_id_value} already processed for ingest_date={ingest_date_value}; "
-            "aborting to prevent duplicate append writes."
+    manifest_path = f"gs://{gold_bucket}/manifests/gold/dt={ingest_date_value}/run_id={run_id_value}/manifest.json"
+    if path_exists(spark, manifest_path) and not args.force:
+        logging.info(
+            "Gold stage manifest exists for run_id=%s ingest_date=%s; skipping stage (use --force to reprocess).",
+            run_id_value,
+            ingest_date_value,
         )
+        spark.stop()
+        return
 
     training_supervised_examples = build_training_supervised_examples(feedback_step, violations)
     model_eval_step_metrics = build_model_eval_step_metrics(feedback_step)
@@ -300,19 +308,135 @@ def main() -> None:
 
     maybe_publish_bigquery(args, tables, gold_bucket)
 
+    input_count = feedback_step.count()
     counts = {table_name: df.count() for table_name, df in tables.items()}
+    finished_at = datetime.utcnow()
+    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    schema_hash_value = feedback_step.select("schema_hash").first()["schema_hash"] if "schema_hash" in feedback_step.columns else None
+
+    try:
+        if schema_hash_value:
+            write_schema_registry_first_seen(
+                [
+                    {
+                        "schema_hash": schema_hash_value,
+                        "schema_json": training_supervised_examples.schema.json(),
+                        "first_seen_run_id": run_id_value,
+                        "source_type": "gold",
+                    }
+                ],
+                dataset=args.ops_dataset,
+            )
+    except Exception as exc:
+        logging.warning("Failed to write gold schema snapshot to ops.schema_registry: %s", exc)
+
     manifest = {
         "run_id": run_id_value,
+        "stage": "gold",
+        "env": args.env,
+        "source_type": "mixed",
+        "input_paths": [silver_root],
+        "output_paths": [gold_root],
+        "schema_hash": schema_hash_value,
+        "record_count_in": input_count,
+        "record_count_out": counts.get("training_supervised_examples", 0),
+        "deadletter_count": 0,
+        "dataproc_batch_id": None,
+        "start_ts": started_at.isoformat() + "Z",
+        "end_ts": finished_at.isoformat() + "Z",
+        "duration_ms": duration_ms,
+        "code_version": args.code_version,
+        "error_category": None,
+        "error_code": None,
         "ingest_date": ingest_date_value,
         "input_path": silver_root,
         "output_path": gold_root,
         "row_counts": counts,
         "published_to_bigquery": args.publish_bigquery,
-        "job_start_ts": datetime.now().isoformat(),
-        "job_end_ts": datetime.now().isoformat(),
+        "job_start_ts": started_at.isoformat() + "Z",
+        "job_end_ts": finished_at.isoformat() + "Z",
     }
     write_manifest(spark, manifest_path, manifest)
     logging.info("Gold manifest written to %s", manifest_path)
+
+    gold_run_row = {
+        "run_id": run_id_value,
+        "stage": "gold",
+        "status": "SUCCEEDED",
+        "start_ts": manifest["start_ts"],
+        "end_ts": manifest["end_ts"],
+        "duration_ms": manifest["duration_ms"],
+        "input_count": manifest["record_count_in"],
+        "output_count": manifest["record_count_out"],
+        "deadletter_count": 0,
+        "schema_hash": schema_hash_value,
+        "dataproc_batch_id": None,
+        "manifest_path": manifest_path,
+        "error_category": None,
+        "error_code": None,
+        "error_summary": None,
+        "code_version": args.code_version,
+        "input_paths": [silver_root],
+        "output_paths": [gold_root],
+        "partition_keys": [f"ingest_date={ingest_date_value}", f"run_id={run_id_value}"],
+    }
+
+    try:
+        write_pipeline_runs([gold_run_row], dataset=args.ops_dataset)
+    except Exception as exc:
+        logging.warning("Failed to write gold stage ops row: %s", exc)
+
+    if args.publish_bigquery:
+        publish_manifest_path = (
+            f"gs://{gold_bucket}/manifests/publish/dt={ingest_date_value}/run_id={run_id_value}/manifest.json"
+        )
+        publish_manifest = {
+            "run_id": run_id_value,
+            "stage": "publish",
+            "env": args.env,
+            "source_type": "mixed",
+            "input_paths": [gold_root],
+            "output_paths": [f"{args.bq_project}:{args.bq_dataset}.gold_*"],
+            "schema_hash": schema_hash_value,
+            "record_count_in": sum(counts.values()),
+            "record_count_out": sum(counts.values()),
+            "deadletter_count": 0,
+            "dataproc_batch_id": None,
+            "start_ts": started_at.isoformat() + "Z",
+            "end_ts": finished_at.isoformat() + "Z",
+            "duration_ms": duration_ms,
+            "code_version": args.code_version,
+            "error_category": None,
+            "error_code": None,
+        }
+        write_manifest(spark, publish_manifest_path, publish_manifest)
+        logging.info("Publish manifest written to %s", publish_manifest_path)
+
+        publish_run_row = {
+            "run_id": run_id_value,
+            "stage": "publish",
+            "status": "SUCCEEDED",
+            "start_ts": publish_manifest["start_ts"],
+            "end_ts": publish_manifest["end_ts"],
+            "duration_ms": publish_manifest["duration_ms"],
+            "input_count": publish_manifest["record_count_in"],
+            "output_count": publish_manifest["record_count_out"],
+            "deadletter_count": 0,
+            "schema_hash": schema_hash_value,
+            "dataproc_batch_id": None,
+            "manifest_path": publish_manifest_path,
+            "error_category": None,
+            "error_code": None,
+            "error_summary": None,
+            "code_version": args.code_version,
+            "input_paths": [gold_root],
+            "output_paths": [f"{args.bq_project}:{args.bq_dataset}.gold_*"],
+            "partition_keys": [f"ingest_date={ingest_date_value}", f"run_id={run_id_value}"],
+        }
+        try:
+            write_pipeline_runs([publish_run_row], dataset=args.ops_dataset)
+        except Exception as exc:
+            logging.warning("Failed to write publish stage ops row: %s", exc)
 
     spark.stop()
 

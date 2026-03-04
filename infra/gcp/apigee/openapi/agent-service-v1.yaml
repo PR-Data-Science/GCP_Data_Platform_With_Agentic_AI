@@ -1,0 +1,68 @@
+openapi: 3.0.3
+info:
+  title: llm-feedback-agent-service
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+  /sessions:
+    post:
+      summary: Create read-only session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                mode:
+                  type: string
+                  enum: [ops, dq]
+      responses:
+        '200':
+          description: Session created
+  /sessions/{session_id}:
+    get:
+      summary: Get session
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session details
+        '404':
+          description: Not found
+  /router:
+    post:
+      summary: Route query to read-only ops/dq contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, query]
+              properties:
+                session_id:
+                  type: string
+                query:
+                  type: string
+                intent_hint:
+                  type: string
+                  enum: [ops, dq]
+      responses:
+        '200':
+          description: Routed response
+        '404':
+          description: Session not found

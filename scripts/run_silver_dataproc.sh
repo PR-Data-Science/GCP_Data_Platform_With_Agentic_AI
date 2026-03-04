@@ -11,6 +11,9 @@ set -euo pipefail
 #   SILVER_PREFIX (default: silver/)
 #   RUN_ID, INGEST_DATE, BATCH_NAME
 #   MODE (default: append)
+#   FORCE_REPROCESS=true|false (default: false)
+#   CODE_VERSION (default: unknown)
+#   OPS_DATASET (default: ops)
 # Backward compatibility:
 #   If GCS_BUCKET is provided, it is used as fallback for BRONZE_BUCKET/SILVER_BUCKET.
 
@@ -29,6 +32,9 @@ BRONZE_PREFIX="${BRONZE_PREFIX:-bronze/}"
 SILVER_PREFIX="${SILVER_PREFIX:-silver/}"
 MODE="${MODE:-append}"
 DATAPROC_PROPERTIES="${DATAPROC_PROPERTIES:-spark.dynamicAllocation.enabled=false,spark.executor.instances=2,spark.executor.cores=4,spark.driver.cores=4}"
+FORCE_REPROCESS="${FORCE_REPROCESS:-false}"
+CODE_VERSION="${CODE_VERSION:-unknown}"
+OPS_DATASET="${OPS_DATASET:-ops}"
 
 ARGS=(
   "--env=${ENV_NAME}"
@@ -37,6 +43,8 @@ ARGS=(
   "--bronze_prefix=${BRONZE_PREFIX}"
   "--silver_prefix=${SILVER_PREFIX}"
   "--mode=${MODE}"
+  "--code_version=${CODE_VERSION}"
+  "--ops_dataset=${OPS_DATASET}"
 )
 
 if [[ -n "${RUN_ID:-}" ]]; then
@@ -47,6 +55,9 @@ if [[ -n "${INGEST_DATE:-}" ]]; then
 fi
 if [[ -n "${BATCH_NAME:-}" ]]; then
   ARGS+=("--batch_name=${BATCH_NAME}")
+fi
+if [[ "${FORCE_REPROCESS}" == "true" ]]; then
+  ARGS+=("--force")
 fi
 
 JOB_FILE="gs://${BRONZE_BUCKET}/jobs/silver_transform_dataproc.py"

@@ -2,3 +2,7 @@ pyyaml==6.*
 google-cloud-storage==2.*
 pytest==8.*
 pyspark==3.5.*
+fastapi==0.116.*
+uvicorn==0.35.*
+httpx==0.28.*
+openai==2.5.*
