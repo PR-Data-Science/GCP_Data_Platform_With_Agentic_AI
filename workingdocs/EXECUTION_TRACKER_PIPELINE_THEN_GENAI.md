@@ -52,14 +52,38 @@ Status legend:
 | G5 | Add Apigee edge policies (auth, quota, routing) | DONE | P1 | G2 | Protected API edge with versioned routes |
 | G6 | Implement retrieval/indexing pipeline + evidence refs | DONE | P0 | G2 | Retrieval returns traceable evidence IDs |
 | G7 | Build audit tables + proposal tables integration in service | DONE | P0 | G2 | Full trace logging for sessions/tool calls/responses |
-| G8 | Build evaluation harness + CI regression gate | IN_PROGRESS | P0 | G4,G6 | Recall/grounding/unsupported-claim metrics enforced |
-| G9 | Build Agent Console MVP integration (Ops/DQ modes first) | NOT_STARTED | P1 | G2,G5,G4 | UI reads from service and displays evidence/tool logs |
-| G10 | Implement proposal lifecycle + HITL states (Phase 2B) | NOT_STARTED | P1 | G7 | DRAFT->REVIEW->APPROVED lifecycle works |
-| G11 | Transform Designer proposal mode (B2S/S2G playbooks) | NOT_STARTED | P1 | G10,G4 | Proposal artifacts generated, not auto-applied |
-| G12 | CI gates + controlled PR automation (Phase 2C) | NOT_STARTED | P2 | G10,G11,G8 | PR creation behind approvals + quality gates |
-| G13 | Controlled trigger automations (draft-only notifications) | NOT_STARTED | P2 | G7,G9 | Event-driven drafts, no auto-rerun/merge |
-| G14 | Security hardening + RBAC + retention + PII controls | NOT_STARTED | P0 | G2-G13 | Security checklist complete and validated |
-| G15 | GenAI phase sign-off checkpoint | NOT_STARTED | P0 | G1-G14 | Phase objectives met and documented |
+| G8 | Build evaluation harness + CI regression gate | DONE | P0 | G4,G6 | Recall/grounding/unsupported-claim metrics enforced |
+| G9 | Build Agent Console MVP integration (Ops/DQ modes first) | DONE | P1 | G2,G5,G4 | UI reads from service and displays evidence/tool logs |
+| G10 | Implement proposal lifecycle + HITL states (Phase 2B) | DONE | P1 | G7 | DRAFT->REVIEW->APPROVED lifecycle works |
+| G11 | Transform Designer proposal mode (B2S/S2G playbooks) | DONE | P1 | G10,G4 | Proposal artifacts generated, not auto-applied |
+| G12 | CI gates + controlled PR automation (Phase 2C) | DONE | P2 | G10,G11,G8 | PR creation behind approvals + quality gates |
+| G13 | Controlled trigger automations (draft-only notifications) | DONE | P2 | G7,G9 | Event-driven drafts, no auto-rerun/merge |
+| G14 | Security hardening + RBAC + retention + PII controls | DONE | P0 | G2-G13 | Security checklist complete and validated |
+| G15 | GenAI phase sign-off checkpoint | DONE | P0 | G1-G14 | Phase objectives met and documented |
+
+---
+
+## C) Crash-Safe Idempotency Upgrade Plan (Schedule after G8)
+
+Goal:
+- Upgrade Raw->Bronze (and align Silver/Gold) from manifest-based rerun safety to crash-safe, replay-safe, and audit-complete commit semantics.
+
+| ID | Task | Status | Priority | Depends On | Acceptance Criteria |
+|---|---|---|---|---|---|
+| I1 | Define commit-state machine + run lifecycle contract | NOT_STARTED | P0 | G8 | Documented states (`STARTED`, `STAGED`, `COMMITTING`, `SUCCEEDED`, `FAILED`, `ABORTED`) with legal transitions and retry rules |
+| I2 | Add `ops.run_commits` control table DDL + model | NOT_STARTED | P0 | I1 | New ops table exists with unique key on (`run_id`,`stage`), attempt tracking, state, and timestamps |
+| I3 | Create commit manager helper module (`src/ops/commit_manager.py`) | NOT_STARTED | P0 | I2 | Reusable APIs: begin attempt, heartbeat, transition state, finalize success/failure, fetch latest attempt |
+| I4 | Implement Bronze staging path write strategy | NOT_STARTED | P0 | I1,I3 | Bronze writes to run-attempt staging path first, never directly to final path |
+| I5 | Add Bronze atomic finalize/publish step | NOT_STARTED | P0 | I4 | Finalization moves/promotes staged artifacts to canonical run path exactly once or marks failed rollback path |
+| I6 | Add deterministic rerun recovery logic | NOT_STARTED | P0 | I4,I5 | On retry, job detects prior partial attempt and executes deterministic resume or cleanup before re-write |
+| I7 | Introduce run-level anti-duplicate guard against existing Bronze output | NOT_STARTED | P1 | I4,I6 | Before finalize, guard verifies no duplicate (`run_id`,`record_hash`) leakage across prior attempts |
+| I8 | Move manifest write behind successful commit boundary | NOT_STARTED | P0 | I5,I6 | Manifest generated only after successful finalize; no manifest on partial data state |
+| I9 | Make `ops.pipeline_runs` write reliable with retry + reconciliation job | NOT_STARTED | P1 | I3,I8 | Ops row write retried; reconciliation job backfills missing rows from manifests/commit table |
+| I10 | Propagate same commit semantics to Silver and Gold | NOT_STARTED | P1 | I1-I9 | Silver/Gold adopt same staging+finalize pattern and consistent state transitions |
+| I11 | Add chaos/failure-injection tests for partial-write windows | NOT_STARTED | P0 | I4-I10 | Tests simulate crash points (before/after data write, before/after manifest, before/after ops writes) and prove deterministic outcomes |
+| I12 | Add runbook for failure recovery + operator playbook | NOT_STARTED | P1 | I6,I9,I11 | Runbook documents commands for resume, cleanup, backfill, and audit verification |
+| I13 | Rollout plan: shadow mode -> canary -> full cutover | NOT_STARTED | P1 | I10-I12 | Rollout checklist with rollback strategy and SLO checkpoints approved |
+| I14 | Idempotency hardening sign-off checkpoint | NOT_STARTED | P0 | I1-I13 | Evidence pack shows no duplicate growth on retry scenarios and complete ops traceability |
 
 ---
 
@@ -94,7 +118,15 @@ Status legend:
 | 25 | G5 | Apigee edge policy scaffolding | DONE | Added `infra/gcp/apigee` OpenAPI v1 contract and starter policies for JWT verify, quota, and version/read-only routing headers |
 | 26 | G6 | Retrieval/indexing + evidence refs | DONE | Added `src/agent_service/retrieval.py` with optional OpenAI embeddings + lexical fallback, integrated router evidence retrieval, and passing retrieval/API tests |
 | 27 | G7 | Audit/proposal tables service integration | DONE | Added audit/proposal persistence module, wired session/router trace logging, added proposal endpoints, extended ops DDL/writers, and validated with 16 passing agent tests |
-| 28 | G8 | Evaluation harness + CI regression gate | IN_PROGRESS | Next implementation task |
+| 28 | G8 | Evaluation harness + CI regression gate | DONE | Added `src/agent_service/eval_harness.py` (EvalHarness, EvalReport, 10-case default suite, BASELINE_THRESHOLDS) and `tests/test_agent_eval.py` (12 CI gate tests); 28/28 tests passing |
+| 29 | I1-I14 | Crash-safe idempotency upgrade plan added to tracker | DONE | Planned backlog captured with dependencies and acceptance criteria for later execution |
+| 30 | G9 | Agent Console MVP integration (Ops/DQ modes first) | DONE | Added `/` -> `/console` route and `/console` UI endpoint in `src/agent_service/app.py`, created `src/agent_service/console_ui.py` with Ops/DQ mode, env/run_id controls, and Answer/Evidence/Tool Calls panels, and validated with 30 passing agent tests |
+| 31 | G10 | Proposal lifecycle + HITL states | DONE | Added `/proposals/{proposal_id}/status` API and transition request model in `src/agent_service/app.py`, implemented role-gated lifecycle transitions in `src/agent_service/audit.py` (`DRAFT->REVIEW->APPROVED/REJECTED`), added lifecycle tests in `tests/test_agent_service.py`, and validated with 34 passing agent tests |
+| 32 | G11 | Transform Designer proposal mode (B2S/S2G playbooks) | DONE | Added `src/agent_service/transform_designer.py` playbook artifact generator, added `/transform-designer/proposals` endpoint and models in `src/agent_service/app.py`, added B2S/S2G + non-auto-apply tests in `tests/test_agent_service.py`, and validated with 37 passing agent tests |
+| 33 | G12 | CI gates + controlled PR automation | DONE | Added `.github/workflows/agent_quality_gates.yml` and controlled `/proposals/{proposal_id}/pr-draft` endpoint in `src/agent_service/app.py` with approval-state checks and eval-gate enforcement via `src/agent_service/ci_gate.py` |
+| 34 | G13 | Controlled trigger automations | DONE | Added `/triggers/draft-actions` endpoint in `src/agent_service/app.py` to create draft proposals and notification payloads only (`draft_only=true`, `auto_execute=false`) |
+| 35 | G14 | Security hardening + RBAC + retention + PII controls | DONE | Added RBAC/PII redaction utilities in `src/agent_service/security.py`, integrated query/response redaction in router audit logging, added `/admin/audit-retention/purge` + `/security/posture`, and implemented retention purge in `src/agent_service/audit.py` |
+| 36 | G15 | GenAI phase sign-off checkpoint | DONE | Completed G1-G14 implementation backlog with validation run `46 passed` including new `tests/test_agent_security.py` |
 
 ---
 

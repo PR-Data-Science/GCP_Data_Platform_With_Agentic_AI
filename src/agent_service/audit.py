@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Literal
 from uuid import uuid4
@@ -14,6 +14,17 @@ from src.ops.ops_writer import (
     write_agent_sessions,
     write_agent_tool_calls,
 )
+
+
+PROPOSAL_TRANSITIONS: dict[str, set[str]] = {
+    "DRAFT": {"REVIEW"},
+    "REVIEW": {"APPROVED", "REJECTED"},
+    "APPROVED": set(),
+    "REJECTED": set(),
+}
+
+REVIEW_ALLOWED_ROLES = {"operator", "engineer", "approver", "admin"}
+APPROVE_ALLOWED_ROLES = {"approver", "admin"}
 
 
 def utc_now_iso() -> str:
@@ -181,6 +192,38 @@ class AuditStore:
     def get_proposal(self, proposal_id: str) -> ProposalRecord | None:
         return self._proposals.get(proposal_id)
 
+    def update_proposal_status(self, *, proposal_id: str, new_status: str, actor_role: str) -> ProposalRecord | None:
+        with self._lock:
+            proposal = self._proposals.get(proposal_id)
+            if proposal is None:
+                return None
+
+            allowed_targets = PROPOSAL_TRANSITIONS.get(proposal.status, set())
+            if new_status not in allowed_targets:
+                raise ValueError(f"invalid_status_transition:{proposal.status}->{new_status}")
+
+            if new_status == "REVIEW" and actor_role not in REVIEW_ALLOWED_ROLES:
+                raise PermissionError(f"role_not_allowed_for_review:{actor_role}")
+
+            if new_status in {"APPROVED", "REJECTED"} and actor_role not in APPROVE_ALLOWED_ROLES:
+                raise PermissionError(f"role_not_allowed_for_approval:{actor_role}")
+
+            updated = ProposalRecord(
+                proposal_id=proposal.proposal_id,
+                session_id=proposal.session_id,
+                route=proposal.route,
+                title=proposal.title,
+                proposal_text=proposal.proposal_text,
+                evidence_refs=proposal.evidence_refs,
+                status=new_status,
+                created_ts=proposal.created_ts,
+                updated_ts=utc_now_iso(),
+            )
+            self._proposals[proposal_id] = updated
+
+        self._persist_proposals([asdict(updated)])
+        return updated
+
     def list_proposals(self, session_id: str) -> list[ProposalRecord]:
         return [proposal for proposal in self._proposals.values() if proposal.session_id == session_id]
 
@@ -190,4 +233,45 @@ class AuditStore:
             "tool_call_events": sum(1 for event in self._tool_calls if event.session_id == session_id),
             "response_events": sum(1 for event in self._responses if event.session_id == session_id),
             "proposal_events": sum(1 for proposal in self._proposals.values() if proposal.session_id == session_id),
+        }
+
+    def purge_older_than(self, *, max_age_seconds: int) -> dict[str, int]:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+
+        def _ts(value: str) -> datetime:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        with self._lock:
+            before = {
+                "sessions": len(self._sessions),
+                "tool_calls": len(self._tool_calls),
+                "responses": len(self._responses),
+                "proposals": len(self._proposals),
+            }
+
+            self._sessions = {
+                sid: event
+                for sid, event in self._sessions.items()
+                if _ts(event.created_ts) >= cutoff
+            }
+            self._tool_calls = [event for event in self._tool_calls if _ts(event.created_ts) >= cutoff]
+            self._responses = [event for event in self._responses if _ts(event.created_ts) >= cutoff]
+            self._proposals = {
+                pid: proposal
+                for pid, proposal in self._proposals.items()
+                if _ts(proposal.updated_ts) >= cutoff
+            }
+
+            after = {
+                "sessions": len(self._sessions),
+                "tool_calls": len(self._tool_calls),
+                "responses": len(self._responses),
+                "proposals": len(self._proposals),
+            }
+
+        return {
+            "removed_sessions": before["sessions"] - after["sessions"],
+            "removed_tool_calls": before["tool_calls"] - after["tool_calls"],
+            "removed_responses": before["responses"] - after["responses"],
+            "removed_proposals": before["proposals"] - after["proposals"],
         }
