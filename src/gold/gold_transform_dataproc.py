@@ -219,11 +219,11 @@ def build_rater_agreement(ratings_long: DataFrame, feedback_step: DataFrame) -> 
 def write_table(df: DataFrame, root: str, table_name: str) -> None:
     if df.rdd.isEmpty():
         return
-    (
-        df.write.mode("append")
-        .partitionBy("ingest_date", "run_id")
-        .parquet(f"{root.rstrip('/')}/{table_name}")
-    )
+    partition_cols = [col for col in ("ingest_date", "run_id") if col in df.columns]
+    writer = df.write.mode("append")
+    if partition_cols:
+        writer = writer.partitionBy(*partition_cols)
+    writer.parquet(f"{root.rstrip('/')}/{table_name}")
 
 
 def maybe_publish_bigquery(args: argparse.Namespace, tables: Dict[str, DataFrame], temp_gcs_bucket: str) -> None:

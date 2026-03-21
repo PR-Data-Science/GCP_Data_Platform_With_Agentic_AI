@@ -63,14 +63,32 @@ if [[ "${PUBLISH_BIGQUERY}" == "true" ]]; then
   ARGS+=("--bq_dataset=${BQ_DATASET}")
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 JOB_FILE="gs://${SILVER_BUCKET}/jobs/gold_transform_dataproc.py"
+PY_FILES_DIR="gs://${SILVER_BUCKET}/jobs/"
+SRC_ZIP_LOCAL="$REPO_ROOT/dist/src_package.zip"
+SRC_ZIP_GCS="${PY_FILES_DIR}src_package.zip"
+
+mkdir -p "$REPO_ROOT/dist"
+
+echo "Packaging src/ for Dataproc --py-files"
+(
+  cd "$REPO_ROOT"
+  rm -f "$SRC_ZIP_LOCAL"
+  zip -rq "$SRC_ZIP_LOCAL" src
+)
 
 echo "Uploading latest job to ${JOB_FILE}"
 gcloud storage cp src/gold/gold_transform_dataproc.py "${JOB_FILE}"
+
+echo "Uploading src package to ${SRC_ZIP_GCS}"
+gcloud storage cp "$SRC_ZIP_LOCAL" "$SRC_ZIP_GCS"
 
 gcloud dataproc batches submit pyspark "${JOB_FILE}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --service-account="${SERVICE_ACCOUNT}" \
+  --py-files="${SRC_ZIP_GCS}" \
   ${DATAPROC_PROPERTIES:+--properties="${DATAPROC_PROPERTIES}"} \
   -- "${ARGS[@]}"
